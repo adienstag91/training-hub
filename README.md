@@ -24,16 +24,17 @@ This project solves that by:
 
 **Phase 1 Complete ✅**
 - [x] Email parser with HTML extraction
-- [x] Rule-based workout classification
+- [x] Rule-based workout classification (all 4 class types)
 - [x] Strength time calculation (residual)
 - [x] Distance standardization (meters)
 - [x] PostgreSQL schema design
-- [x] 100% test coverage
+- [x] pytest suite with synthetic fixture emails (runs in any clone, no personal data)
 
 **Phase 2 (In Progress)**
-- [ ] PostgreSQL ingestion script
+- [x] PostgreSQL ingestion script (idempotent, env-configured, verified end-to-end)
+- [ ] Real email header parsing (Message-ID / Date / Subject — currently derived from filename)
 - [ ] Strava API integration
-- [ ] Event-based email ingestion (Zapier)
+- [ ] Event-based email ingestion (webhook + Zapier/n8n)
 
 **Phase 3 (Planned)**
 - [ ] Weekly insights rollup
@@ -43,35 +44,36 @@ This project solves that by:
 ## Quick Start
 
 ### Prerequisites
-```bash
-# Python 3.8+
-python --version
-
-# PostgreSQL
-brew install postgresql  # macOS
-brew services start postgresql
-```
+- Python 3.8+
+- Docker (for PostgreSQL)
 
 ### Installation
 ```bash
 # Clone repo
-git clone https://github.com/yourusername/otf-training-pipeline.git
-cd otf-training-pipeline
+git clone https://github.com/adienstag91/training-hub.git
+cd training-hub
 
 # Install dependencies
-pip install -r requirements.txt
+make setup          # or: pip install -r requirements.txt
 
-# Set up database
-createdb otf_training
-psql otf_training < schema.sql
+# Start PostgreSQL (schema applied automatically on first run; port 5434)
+make db             # or: docker compose up -d
 ```
 
 ### Run Tests
 ```bash
-# Place sample OTF emails in data/sample_emails/
-# (They're gitignored to protect personal info)
+make test           # or: python -m pytest tests/ -v
+```
+Tests run against synthetic fixture emails in `tests/fixtures/` — they mirror
+the structure of real OTF emails but contain no personal data.
 
-python tests/test_parser.py
+### Ingest Emails
+```bash
+# Ingest a single OTF email
+python src/ingestion/ingest_otf_emails.py path/to/email.html 2026-07-01
+
+# Or drop real emails in data/sample_data/otf/ (gitignored) and run
+make ingest
 ```
 
 ## Example Usage
@@ -183,21 +185,13 @@ strava_activity        -- Output adapter
 ## Test Results
 
 ```
-✅ 90-min ORANGE class
-   Tread: 23.93 min (5165m)
-   Row: 17.88 min (4189m)
-   Strength: 48.18 min (calculated)
+✅ ORANGE_90  — tread 23:45 (5165m) + row 17:30 (4189m) + strength 48:45 (residual)
+✅ ORANGE_60  — tread 25:15 (5149m) + row 3:45 (932m) + strength 31:00 (residual)
+✅ TREAD_50   — tread 44:30 (9253m), no strength component
+✅ STRENGTH_50 — no cardio sections, full 50 min strength
 
-✅ 60-min ORANGE class
-   Tread: 25.88 min (5149m)
-   Row: 3.85 min (932m)
-   Strength: 30.27 min (calculated)
-
-✅ TREAD_50
-   Tread: 44.87 min (9253m)
-   Strength: 0 min (no component created)
-
-Coverage: 3/3 workout types (100%)
+Coverage: 4/4 workout types, plus time-parsing and classification
+boundary tests (15 tests, all passing)
 ```
 
 ## Technology Stack
@@ -233,12 +227,9 @@ MIT License - see LICENSE file for details
 
 ## Contact
 
-Andrew Dienstag - [LinkedIn](https://linkedin.com/in/yourprofile) | [Email](mailto:andrew.dienstag@gmail.com)
+Andrew Dienstag - [Email](mailto:andrew.dienstag@gmail.com)
 
 ---
 
 **Built with production-grade data engineering principles**  
 *Idempotent pipelines • Type-safe schemas • Event-driven architecture*
-# training-hub
-# training-hub
-# training-hub

@@ -43,6 +43,9 @@ data/sample_data/**/*.eml
 *.html
 *.eml
 
+# Synthetic test fixtures contain no personal data — keep them in git
+!tests/fixtures/*.html
+
 # Database
 *.db
 *.sqlite3

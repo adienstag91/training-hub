@@ -1,67 +1,58 @@
-# Training Hub - Final Project Structure
+# Training Hub - Project Structure
 
 ## Repository Layout
 
 ```
 training-hub/
 ├── README.md                           # Main project documentation
-├── .gitignore                          # Excludes personal data
+├── PROJECT_STRUCTURE.md                # This file
+├── .gitignore                          # Excludes personal data (real emails, tokens)
+├── .env.example                        # DB connection template
 ├── requirements.txt                    # Python dependencies
 ├── schema.sql                          # PostgreSQL database schema
+├── docker-compose.yml                  # Local Postgres (port 5434, auto-loads schema)
+├── Makefile                            # setup / db / test / ingest shortcuts
 │
 ├── src/                                # Source code
 │   ├── __init__.py
 │   ├── parsers/                        # Source-specific parsers
 │   │   ├── __init__.py
-│   │   ├── otf_parser.py              # OrangeTheory email parser
-│   │   ├── strava_parser.py           # (future) Strava API
-│   │   └── peloton_parser.py          # (future) Peloton exports
-│   ├── ingestion/                      # (future) Database insertion
-│   │   └── __init__.py
-│   └── publishing/                     # (future) Strava sync
-│       └── __init__.py
+│   │   └── otf_parser.py              # OrangeTheory email parser
+│   └── ingestion/                      # Database insertion
+│       └── ingest_otf_emails.py       # Idempotent OTF email → Postgres
 │
-├── tests/                              # Test suite
+├── tests/                              # Test suite (pytest)
 │   ├── __init__.py
-│   └── test_parser.py                 # OTF parser tests
+│   ├── conftest.py                    # Puts src/ on the import path
+│   ├── fixtures/                       # Synthetic OTF emails (safe to commit)
+│   │   ├── fixture_orange_90.html
+│   │   ├── fixture_orange_60.html
+│   │   ├── fixture_tread_50.html
+│   │   └── fixture_strength_50.html
+│   └── test_parser.py                 # Parser + classification tests
 │
 └── data/                               # Local data (gitignored)
     └── sample_data/
-        ├── otf/                        # OTF email samples
-        │   ├── sample_90_min.html
-        │   ├── sample_60_min.html
-        │   └── sample_tread50.html
-        ├── strava/                     # (future)
-        ├── peloton/                    # (future)
-        └── apple_health/               # (future)
+        └── otf/                        # Real OTF emails go here (never committed)
 ```
 
-## Database Name
+## Current Phase
 
-```sql
--- Database name updated to match project
-createdb training_hub  
-```
+**Done:** OTF parser, classification (all 4 class types), pytest suite with
+synthetic fixtures, idempotent Postgres ingestion, dockerized local DB.
 
-## Current Phase: OTF Parser Complete
-
-**Implemented:**
-- `src/parsers/otf_parser.py` - Full parser with classification
-- `tests/test_parser.py` - 100% test coverage
-- `schema.sql` - Multi-source ready schema
-- Sample emails in `data/sample_data/otf/`
-
-**Next Phase:**
-- `src/ingestion/otf_ingestion.py` - Insert parsed data to DB
-- Strava API integration
-- Additional source parsers
+**Next:**
+- Real email header parsing (Message-ID / Date / Subject)
+- Strava publishing (`src/publishing/`)
+- Event-driven email ingestion (webhook + Zapier/n8n)
+- Additional source parsers (Strava, Peloton)
 
 ## Multi-Source Vision
 
 Each source gets:
 1. **Parser** (`src/parsers/<source>_parser.py`)
 2. **Raw table** (`<source>_raw` in schema)
-3. **Ingestion script** (`src/ingestion/<source>_ingestion.py`)
+3. **Ingestion script** (`src/ingestion/ingest_<source>.py`)
 4. **Tests** (`tests/test_<source>_parser.py`)
 
 All sources normalize to:
