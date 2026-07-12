@@ -3,8 +3,10 @@ beautifulsoup4==4.12.3
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1
 
+# Webhook server + Strava publishing
+flask==3.0.3
+stravalib==1.7
+requests==2.31.0
+
 # Development / testing
 pytest==8.2.0
-
-# Phase 2 (uncomment when needed)
-# requests==2.31.0           # For Strava API

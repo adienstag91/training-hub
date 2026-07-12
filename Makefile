@@ -1,4 +1,4 @@
-.PHONY: setup db db-down db-reset db-psql test ingest
+.PHONY: setup db db-down db-reset db-psql test ingest webhook strava-auth publish
 
 # Install Python dependencies
 setup:
@@ -26,6 +26,18 @@ db-psql:
 test:
 	python -m pytest tests/ -v
 
-# Ingest sample emails from data/sample_data/otf/
+# Ingest OTF emails from data/sample_data/otf/
 ingest:
 	python src/ingestion/ingest_otf_emails.py
+
+# Run the Zapier/n8n webhook server (port 5000; expose with ngrok)
+webhook:
+	python src/webhook/webhook_server.py
+
+# One-time Strava OAuth flow (saves tokens to .env)
+strava-auth:
+	python src/strava/strava_auth.py
+
+# Publish all unpublished components to Strava
+publish:
+	python src/strava/publish_to_strava.py

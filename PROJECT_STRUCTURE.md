@@ -17,19 +17,31 @@ training-hub/
 │   ├── __init__.py
 │   ├── parsers/                        # Source-specific parsers
 │   │   ├── __init__.py
-│   │   └── otf_parser.py              # OrangeTheory email parser
-│   └── ingestion/                      # Database insertion
-│       └── ingest_otf_emails.py       # Idempotent OTF email → Postgres
+│   │   ├── otf_parser.py              # v1 (legacy — superseded by v3)
+│   │   ├── otf_parser_v3.py           # OTF parser: headers + body datetime
+│   │   └── apple_health_parser.py     # Health Auto Export JSON
+│   ├── ingestion/                      # Database insertion
+│   │   └── ingest_otf_emails.py       # Idempotent OTF email → Postgres (v2 schema)
+│   ├── strava/                         # Strava output adapter
+│   │   ├── strava_auth.py             # One-time OAuth flow
+│   │   └── publish_to_strava.py       # Per-component publishing + token refresh
+│   ├── webhook/                        # Event-driven ingestion
+│   │   └── webhook_server.py          # Flask: /ingest (OTF), /ingest/apple
+│   └── utils/
+│       ├── db.py                      # Shared DB connection (DATABASE_URL / POSTGRES_*)
+│       └── clean_db.py                # Wipe tables for testing
 │
 ├── tests/                              # Test suite (pytest)
 │   ├── __init__.py
-│   ├── conftest.py                    # Puts src/ on the import path
-│   ├── fixtures/                       # Synthetic OTF emails (safe to commit)
+│   ├── conftest.py                    # Puts the project root on the import path
+│   ├── fixtures/                       # Synthetic fixtures (safe to commit)
 │   │   ├── fixture_orange_90.html
 │   │   ├── fixture_orange_60.html
 │   │   ├── fixture_tread_50.html
-│   │   └── fixture_strength_50.html
-│   └── test_parser.py                 # Parser + classification tests
+│   │   ├── fixture_strength_50.html
+│   │   └── fixture_apple_health.json
+│   ├── test_parser.py                 # OTF parser v3 + classification tests
+│   └── test_apple_health_parser.py    # Apple Health parser tests
 │
 └── data/                               # Local data (gitignored)
     └── sample_data/
@@ -38,14 +50,16 @@ training-hub/
 
 ## Current Phase
 
-**Done:** OTF parser, classification (all 4 class types), pytest suite with
-synthetic fixtures, idempotent Postgres ingestion, dockerized local DB.
+**Done:** OTF parser v3 (real Message-ID + workout datetime from the email),
+classification (all 4 class types), schema v2 (component detail tables,
+multi-source), idempotent ingestion, Strava OAuth + publishing, Flask webhook
+for Zapier/n8n, Apple Health parsing, pytest suite with synthetic fixtures,
+dockerized local DB.
 
 **Next:**
-- Real email header parsing (Message-ID / Date / Subject)
-- Strava publishing (`src/publishing/`)
-- Event-driven email ingestion (webhook + Zapier/n8n)
-- Additional source parsers (Strava, Peloton)
+- Deploy the webhook server (currently local + ngrok)
+- Re-verify the parser against current OTF email format
+- Additional source parsers (Strava-native, Peloton)
 
 ## Multi-Source Vision
 

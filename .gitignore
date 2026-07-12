@@ -46,6 +46,10 @@ data/sample_data/**/*.eml
 # Synthetic test fixtures contain no personal data — keep them in git
 !tests/fixtures/*.html
 
+# Apple Health exports (personal data)
+HealthAutoExport*.json
+data/**/*.json
+
 # Database
 *.db
 *.sqlite3

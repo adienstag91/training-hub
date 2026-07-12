@@ -1,16 +1,22 @@
 """
-OTF parser tests.
+OTF parser (v3) tests.
 
 Run against synthetic fixture emails in tests/fixtures/ — these mirror the
-table structure of real OTF performance-summary emails but contain no
-personal data, so they are safe to commit and the suite runs in any clone.
+structure of real OTF performance-summary emails (headers + HTML body) but
+contain no personal data, so they are safe to commit and the suite runs in
+any clone.
 """
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from parsers.otf_parser import classify_workout, parse_otf_email, parse_time_to_minutes
+from src.parsers.otf_parser_v3 import (
+    classify_workout,
+    extract_time_from_text,
+    parse_otf_email,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -20,7 +26,7 @@ def load_fixture(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# parse_time_to_minutes
+# extract_time_from_text
 # ---------------------------------------------------------------------------
 
 
@@ -28,18 +34,18 @@ def load_fixture(name: str) -> str:
     "time_str, expected",
     [
         ("23:45", 23.75),
-        ("3:45", 3.75),
-        ("1:05:30", 65.5),  # HH:MM:SS
+        (" 3:45 ", 3.75),
         ("0:30", 0.5),
+        ("23‌:45", 23.75),  # zero-width non-joiner, as seen in real emails
     ],
 )
-def test_parse_time_to_minutes(time_str, expected):
-    assert parse_time_to_minutes(time_str) == pytest.approx(expected)
+def test_extract_time_from_text(time_str, expected):
+    assert extract_time_from_text(time_str) == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("bad_input", [None, "", "not a time"])
-def test_parse_time_to_minutes_invalid(bad_input):
-    assert parse_time_to_minutes(bad_input) is None
+@pytest.mark.parametrize("bad_input", ["", "not a time", "45 minutes"])
+def test_extract_time_from_text_invalid(bad_input):
+    assert extract_time_from_text(bad_input) is None
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +87,11 @@ def test_classify_strength_residual_never_negative():
 
 
 def test_parse_orange_90():
-    parsed = parse_otf_email(load_fixture("fixture_orange_90.html"), "test-orange-90")
+    parsed = parse_otf_email(load_fixture("fixture_orange_90.html"))
     c = parsed["classification"]
+
+    assert parsed["message_id"] == "fixture-orange-90@fixtures.traininghub"
+    assert parsed["workout_datetime"] == datetime(2025, 12, 6, 10, 45)
 
     assert c["class_type"] == "ORANGE_90"
     assert c["class_minutes"] == 90
@@ -100,8 +109,11 @@ def test_parse_orange_90():
 
 
 def test_parse_orange_60():
-    parsed = parse_otf_email(load_fixture("fixture_orange_60.html"), "test-orange-60")
+    parsed = parse_otf_email(load_fixture("fixture_orange_60.html"))
     c = parsed["classification"]
+
+    assert parsed["message_id"] == "fixture-orange-60@fixtures.traininghub"
+    assert parsed["workout_datetime"] == datetime(2025, 12, 5, 9, 30)
 
     assert c["class_type"] == "ORANGE_60"
     assert c["class_minutes"] == 60
@@ -116,8 +128,10 @@ def test_parse_orange_60():
 
 
 def test_parse_tread_50():
-    parsed = parse_otf_email(load_fixture("fixture_tread_50.html"), "test-tread-50")
+    parsed = parse_otf_email(load_fixture("fixture_tread_50.html"))
     c = parsed["classification"]
+
+    assert parsed["workout_datetime"] == datetime(2025, 12, 4, 18, 0)  # 6:00 PM
 
     assert c["class_type"] == "TREAD_50"
     assert c["class_minutes"] == 50
@@ -130,8 +144,10 @@ def test_parse_tread_50():
 
 
 def test_parse_strength_50():
-    parsed = parse_otf_email(load_fixture("fixture_strength_50.html"), "test-strength-50")
+    parsed = parse_otf_email(load_fixture("fixture_strength_50.html"))
     c = parsed["classification"]
+
+    assert parsed["workout_datetime"] == datetime(2025, 12, 3, 7, 15)
 
     assert c["class_type"] == "STRENGTH_50"
     assert c["class_minutes"] == 50
@@ -145,6 +161,10 @@ def test_parse_strength_50():
     assert parsed["splat_points"] == 3
 
 
-def test_message_id_passthrough():
-    parsed = parse_otf_email(load_fixture("fixture_orange_60.html"), "msg-abc-123")
-    assert parsed["message_id"] == "msg-abc-123"
+def test_missing_headers_yield_none_message_id():
+    """An email body without header lines must not crash the parser."""
+    html_only = load_fixture("fixture_orange_60.html").split("\n\n", 1)[1]
+    parsed = parse_otf_email(html_only)
+    assert parsed["message_id"] is None
+    # Body-derived fields still work
+    assert parsed["classification"]["class_type"] == "ORANGE_60"

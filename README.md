@@ -23,18 +23,21 @@ This project solves that by:
 ## Project Status
 
 **Phase 1 Complete ✅**
-- [x] Email parser with HTML extraction
+- [x] Email parser with HTML extraction (v3: tag-based navigation)
 - [x] Rule-based workout classification (all 4 class types)
 - [x] Strength time calculation (residual)
 - [x] Distance standardization (meters)
-- [x] PostgreSQL schema design
+- [x] Real email header parsing (Message-ID from headers, workout datetime from body)
+- [x] PostgreSQL schema v2 (component-specific detail tables, multi-source)
 - [x] pytest suite with synthetic fixture emails (runs in any clone, no personal data)
 
-**Phase 2 (In Progress)**
+**Phase 2 (Mostly Complete)**
 - [x] PostgreSQL ingestion script (idempotent, env-configured, verified end-to-end)
-- [ ] Real email header parsing (Message-ID / Date / Subject — currently derived from filename)
-- [ ] Strava API integration
-- [ ] Event-based email ingestion (webhook + Zapier/n8n)
+- [x] Strava API integration (OAuth flow + per-component publishing with token refresh)
+- [x] Webhook server for event-based email ingestion (Flask; Zapier/n8n → `/ingest`)
+- [x] Apple Health ingestion (Health Auto Export JSON → `/ingest/apple`)
+- [ ] Deploy the webhook server (currently local + ngrok)
+- [ ] Re-verify parser against current OTF email format
 
 **Phase 3 (Planned)**
 - [ ] Weekly insights rollup
@@ -69,12 +72,27 @@ the structure of real OTF emails but contain no personal data.
 
 ### Ingest Emails
 ```bash
-# Ingest a single OTF email
-python src/ingestion/ingest_otf_emails.py path/to/email.html 2026-07-01
+# Ingest a single OTF email (date + Message-ID parsed from the email itself)
+python src/ingestion/ingest_otf_emails.py path/to/email.html
 
 # Or drop real emails in data/sample_data/otf/ (gitignored) and run
 make ingest
 ```
+
+### Publish to Strava
+```bash
+make strava-auth   # one-time OAuth flow; saves tokens to .env
+make publish       # publish all unpublished components
+```
+
+### Run the Webhook Server (event-driven ingestion)
+```bash
+make webhook       # Flask on :5000; expose with ngrok for Zapier/n8n
+# POST {"html": "<email html>"} to /ingest  → parse + DB + Strava
+# POST Health Auto Export JSON to /ingest/apple
+```
+Strava auto-publish is skipped automatically when no `STRAVA_ACCESS_TOKEN`
+is configured (or when `STRAVA_AUTO_PUBLISH=false`).
 
 ## Example Usage
 
@@ -144,42 +162,44 @@ source_key = f"otf_email:{message_id}:{workout_date}"
 entity_key = f"workout:{date}:otf_{type}:{session_id}"
 ```
 
-### 4. Single Component Table
-One table for run/row/strength with CHECK constraints:
+### 4. Base Component Table + Type-Specific Detail Tables (schema v2)
+A shared `workout_component` table holds what every component has (type,
+duration, sequence order); per-type detail tables hold the rest:
 ```sql
--- Run must have distance
-CHECK (component_type != 'run' OR distance_meters IS NOT NULL)
-
--- Strength cannot have distance
-CHECK (component_type != 'strength' OR distance_meters IS NULL)
+workout_component            -- shared: type, duration_seconds, sequence_order
+  ├── run_component          -- distance, elevation, cadence, GPS
+  ├── row_component          -- distance, stroke rate, watts
+  ├── bike_component         -- distance, cadence, power (Peloton-ready)
+  └── strength_component     -- exercises, muscle groups, equipment
 ```
 
-**Why not separate tables?** Simpler queries, easier to add new types (bike, strider), still fully normalized (3NF).
+**Why?** Each modality gets its own metrics without a sea of NULLable
+columns, and adding a new type (bike, strider) is a new detail table, not
+a schema-wide change.
 
 ### 5. Distance in Meters (Always)
 Tread distance converted from miles → meters at parse time. Single unit throughout system prevents conversion bugs.
 
-## Database Schema
+## Database Schema (v2)
 
 ```sql
-otf_email_raw          -- Raw emails (never modified)
-  ├── message_id (unique)
-  └── raw_html
+otf_email_raw               -- Raw emails (never modified)
+strava_activity_raw         -- Raw Strava activities (future input)
+peloton_workout_raw         -- Raw Peloton workouts (future input)
 
-workout_session        -- Normalized sessions
+workout_session             -- Normalized sessions (all sources)
   ├── entity_key (unique)
-  ├── class_type
-  └── class_minutes
+  ├── source_type (otf/strava/peloton/apple_health/manual)
+  ├── start_time, otf_class_type
+  └── source_metadata (JSONB)
 
-workout_component      -- Granular components
+workout_component           -- Base component (shared fields)
   ├── entity_key (unique)
-  ├── component_type (run/row/strength)
-  ├── duration_seconds
-  └── distance_meters
+  ├── component_type (run/row/bike/strength/other)
+  ├── duration_seconds, sequence_order
+  ├── run_component / row_component / bike_component / strength_component
 
-strava_activity        -- Output adapter
-  ├── workout_component_id (FK)
-  └── strava_activity_id
+strava_activity_publish     -- Output adapter (sync status per component)
 ```
 
 ## Test Results
