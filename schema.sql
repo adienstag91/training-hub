@@ -1,3 +1,5 @@
+
+
 -- OTF Training Data Spine Schema
 -- Core principle: ELT pattern - store raw first, normalize downstream
 

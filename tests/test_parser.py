@@ -3,8 +3,12 @@ Test OTF Parser against sample emails.
 Validates classification rules and metric extraction.
 """
 
-from otf_parser import parse_otf_email
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.parsers.otf_parser_v3 import parse_otf_email
 import json
+from pathlib import Path
 
 
 def test_email(filepath: str, expected_class: str, test_name: str):
@@ -17,13 +21,19 @@ def test_email(filepath: str, expected_class: str, test_name: str):
     with open(filepath, 'r', encoding='utf-8') as f:
         html = f.read()
     
-    parsed = parse_otf_email(html, f'test-{test_name}')
+    parsed = parse_otf_email(html)
     
     classification = parsed['classification']
     tread = parsed['tread']
     row = parsed['row']
     
     print(f"\n📊 CLASSIFICATION")
+    print(f"  Class Date & Time: {parsed['workout_datetime']}")
+    #print(f"  message_id: {parsed['message_id']}")
+    #print(f"  subject: {parsed['subject']}")
+
+
+
     print(f"  Type: {classification['class_type']}")
     print(f"  Duration: {classification['class_minutes']} min")
     
@@ -58,46 +68,52 @@ def test_email(filepath: str, expected_class: str, test_name: str):
     return success
 
 
+def infer_expected_class(filename: str) -> str:
+    """Infer expected class type from filename."""
+    filename_lower = filename.lower()
+
+    if 'tread50' in filename_lower or 'tread_50' in filename_lower:
+        return 'TREAD_50'
+    elif '90_min' in filename_lower or '90min' in filename_lower:
+        return 'ORANGE_90'
+    elif '60_min' in filename_lower or '60min' in filename_lower:
+        return 'ORANGE_60'
+    else:
+        # Default to 60-minute Orange class if can't determine
+        return 'ORANGE_60'
+
+
 def main():
     """Run all tests."""
     print("\n" + "="*60)
     print("OTF EMAIL PARSER VALIDATION")
     print("="*60)
-    
+
     # Use relative paths from script location
-    import os
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    emails_dir = os.path.join(script_dir, 'emails')
-    
+    emails_dir = Path(__file__).parent.parent / 'data' / 'sample_emails'
+
+    # Discover all HTML files in the directory
+    html_files = sorted(emails_dir.glob('*.html'))
+
+    if not html_files:
+        print("\n⚠️  No HTML files found in", emails_dir)
+        return
+
+    print(f"\nFound {len(html_files)} HTML file(s) to test")
+
     results = []
-    
-    # Test 1: 90-minute class
-    results.append(
-        test_email(
-            os.path.join(emails_dir, 'sample_90_min.html'),
-            'ORANGE_90',
-            '90-min Orange class'
+
+    # Test each HTML file
+    for html_file in html_files:
+        expected_class = infer_expected_class(html_file.name)
+        results.append(
+            test_email(
+                str(html_file),
+                expected_class,
+                html_file.name
+            )
         )
-    )
-    
-    # Test 2: 60-minute class
-    results.append(
-        test_email(
-            os.path.join(emails_dir, 'sample_60_min.html'),
-            'ORANGE_60',
-            '60-min Orange class'
-        )
-    )
-    
-    # Test 3: Tread 50
-    results.append(
-        test_email(
-            os.path.join(emails_dir, 'sample_tread50.html'),
-            'TREAD_50',
-            'Tread 50 class'
-        )
-    )
-    
+
     # Summary
     print("\n" + "="*60)
     print("SUMMARY")
@@ -106,7 +122,7 @@ def main():
     passed = sum(results)
     print(f"Tests passed: {passed}/{total}")
     print(f"Success rate: {passed/total*100:.0f}%")
-    
+
     if passed == total:
         print("\n🎉 All tests passed!")
     else:

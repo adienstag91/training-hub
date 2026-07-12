@@ -1,46 +1,46 @@
 """
-OTF Email Ingestion Script
-Parses OTF emails and inserts into PostgreSQL database with idempotency.
+OTF Email Ingestion Script v2
+Inserts parsed OTF data into component-specific tables.
 """
 
 import sys
 import os
 import psycopg2
+import psycopg2.extras
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Get project root (training-hub directory)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+ENV_PATH = PROJECT_ROOT / '.env'
+
+# Load environment variables from project root
+load_dotenv(ENV_PATH)
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from parsers.otf_parser import parse_otf_email
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.parsers.otf_parser_v3 import parse_otf_email
 
 
 def get_db_connection():
     """Create PostgreSQL database connection."""
     return psycopg2.connect(
-        host="localhost",
-        database="training_hub",
-        user=os.environ.get('USER'),  # Your Mac username
-        password=""  # No password for local Postgres
+        host=os.getenv('POSTGRES_HOST', 'localhost'),
+        port=os.getenv('POSTGRES_PORT', '5432'),
+        database=os.getenv('POSTGRES_DB', 'training_hub'),
+        user=os.getenv('POSTGRES_USER', os.environ.get('USER')),
+        password=os.getenv('POSTGRES_PASSWORD')
     )
 
 
-def extract_message_id_from_file(filepath):
+def ingest_otf_email(filepath, workout_date=None):
     """
-    Extract Message-ID from email file.
-    For now, use filename as a simple message_id.
-    TODO: Parse actual email headers when using real emails.
-    """
-    filename = Path(filepath).stem
-    return f"file:{filename}"
-
-
-def ingest_otf_email(filepath, workout_date):
-    """
-    Ingest a single OTF email into the database.
+    Ingest OTF email into database with component-specific tables.
     
     Args:
         filepath: Path to HTML email file
-        workout_date: Date of workout (datetime.date)
+        workout_date: Optional - if None, will use date from email body
     
     Returns:
         Dict with inserted IDs
@@ -49,20 +49,37 @@ def ingest_otf_email(filepath, workout_date):
     cur = conn.cursor()
     
     try:
-        # Read email HTML
+        # Read and parse email
         with open(filepath, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Extract message ID
-        message_id = extract_message_id_from_file(filepath)
-        
-        # Parse email
-        parsed = parse_otf_email(html_content, message_id)
+        parsed = parse_otf_email(html_content)
         classification = parsed['classification']
         
+        # Extract message_id and workout_datetime from parsed email
+        message_id = parsed['message_id']
+        workout_datetime = parsed['workout_datetime']
+        
+        if not message_id:
+            print(f"⚠️  Could not extract Message-ID from email")
+            return None
+        
+        if not workout_datetime:
+            print(f"⚠️  Could not extract workout date/time from email body")
+            return None
+        
+        # Use parsed datetime (has both date and time)
+        workout_date = workout_datetime.date()
+        start_time = workout_datetime
+        
+        # ====================================================================
         # Step 1: Insert raw email (with idempotency check)
+        # ====================================================================
         cur.execute("""
-            INSERT INTO otf_email_raw (message_id, workout_date, received_at, subject, raw_html, parsed_at)
+            INSERT INTO otf_email_raw (
+                message_id, workout_date, received_at, subject, 
+                raw_html, parsed_at
+            )
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (message_id, workout_date) DO NOTHING
             RETURNING id
@@ -70,7 +87,7 @@ def ingest_otf_email(filepath, workout_date):
             message_id,
             workout_date,
             datetime.now(),
-            parsed.get('subject', 'OTF Workout'),
+            'OTF Workout Summary',  # Generic subject
             html_content,
             datetime.now()
         ))
@@ -82,16 +99,25 @@ def ingest_otf_email(filepath, workout_date):
             return None
         
         otf_email_id = result[0]
-        print(f"✅ Inserted raw email: ID {otf_email_id}")
+        print(f"✅ Inserted raw email (ID {otf_email_id})")
         
+        # ====================================================================
         # Step 2: Insert workout session
+        # ====================================================================
         entity_key = f"workout:{workout_date.isoformat()}:otf:default"
+        
+        # Build source_metadata JSON
+        source_metadata = {
+            'splat_points': parsed.get('splat_points'),
+            'evidence': classification['evidence']
+        }
         
         cur.execute("""
             INSERT INTO workout_session (
-                otf_email_id, source_type, entity_key, workout_date,
-                class_type, class_minutes, total_calories, splat_points,
-                classification_evidence
+                otf_email_id, source_type, entity_key, 
+                workout_date, start_time, otf_class_type, 
+                total_duration_seconds, total_calories,
+                source_metadata
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
@@ -100,26 +126,31 @@ def ingest_otf_email(filepath, workout_date):
             'otf',
             entity_key,
             workout_date,
+            start_time,  # Now populated with actual class start time!
             classification['class_type'],
-            classification['class_minutes'],
+            classification['class_minutes'] * 60,  # Convert to seconds
             parsed.get('total_calories'),
-            parsed.get('splat_points'),
-            psycopg2.extras.Json(classification['evidence'])
+            psycopg2.extras.Json(source_metadata)
         ))
         
         session_id = cur.fetchone()[0]
-        print(f"✅ Inserted session: {classification['class_type']} (ID {session_id})")
+        print(f"✅ Inserted session: {classification['class_type']} at {start_time.strftime('%I:%M %p')} (ID {session_id})")
         
-        # Step 3: Insert workout components
+        # ====================================================================
+        # Step 3: Insert workout components with type-specific details
+        # ====================================================================
         components_inserted = []
         
-        # Insert tread component (if exists)
+        # -------------------------------------------------------------------
+        # TREAD COMPONENT (if exists)
+        # -------------------------------------------------------------------
         if classification['tread_seconds'] > 0:
+            # Insert base component
             tread_entity_key = f"workout:{workout_date.isoformat()}:otf_run:{session_id}"
             cur.execute("""
                 INSERT INTO workout_component (
                     workout_session_id, entity_key, component_type,
-                    duration_seconds, distance_meters, is_derived
+                    duration_seconds, is_derived, sequence_order
                 )
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
@@ -128,19 +159,34 @@ def ingest_otf_email(filepath, workout_date):
                 tread_entity_key,
                 'run',
                 classification['tread_seconds'],
-                parsed['tread'].get('distance_meters'),
-                False
+                False,
+                1  # First component in OTF session
             ))
-            comp_id = cur.fetchone()[0]
-            components_inserted.append(f"run (ID {comp_id})")
+            run_component_id = cur.fetchone()[0]
+            
+            # Insert run-specific details
+            cur.execute("""
+                INSERT INTO run_component (
+                    component_id, distance_meters
+                )
+                VALUES (%s, %s)
+            """, (
+                run_component_id,
+                parsed['tread']['distance_meters']
+            ))
+            
+            components_inserted.append(f"run (ID {run_component_id}, {parsed['tread']['distance_meters']}m)")
         
-        # Insert row component (if exists)
+        # -------------------------------------------------------------------
+        # ROW COMPONENT (if exists)
+        # -------------------------------------------------------------------
         if classification['row_seconds'] > 0:
+            # Insert base component
             row_entity_key = f"workout:{workout_date.isoformat()}:otf_row:{session_id}"
             cur.execute("""
                 INSERT INTO workout_component (
                     workout_session_id, entity_key, component_type,
-                    duration_seconds, distance_meters, is_derived
+                    duration_seconds, is_derived, sequence_order
                 )
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
@@ -149,19 +195,34 @@ def ingest_otf_email(filepath, workout_date):
                 row_entity_key,
                 'row',
                 classification['row_seconds'],
-                parsed['row'].get('total_distance_meters'),
-                False
+                False,
+                2  # Second component
             ))
-            comp_id = cur.fetchone()[0]
-            components_inserted.append(f"row (ID {comp_id})")
+            row_component_id = cur.fetchone()[0]
+            
+            # Insert row-specific details
+            cur.execute("""
+                INSERT INTO row_component (
+                    component_id, distance_meters
+                )
+                VALUES (%s, %s)
+            """, (
+                row_component_id,
+                parsed['row']['total_distance_meters']
+            ))
+            
+            components_inserted.append(f"row (ID {row_component_id}, {parsed['row']['total_distance_meters']}m)")
         
-        # Insert strength component (if exists)
+        # -------------------------------------------------------------------
+        # STRENGTH COMPONENT (if exists)
+        # -------------------------------------------------------------------
         if classification['strength_seconds'] > 0:
+            # Insert base component
             strength_entity_key = f"workout:{workout_date.isoformat()}:otf_strength:{session_id}"
             cur.execute("""
                 INSERT INTO workout_component (
                     workout_session_id, entity_key, component_type,
-                    duration_seconds, distance_meters, is_derived
+                    duration_seconds, is_derived, sequence_order
                 )
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
@@ -170,11 +231,22 @@ def ingest_otf_email(filepath, workout_date):
                 strength_entity_key,
                 'strength',
                 classification['strength_seconds'],
-                None,  # No distance for strength
-                True   # Strength time is derived
+                True,  # Strength time is derived (residual)
+                3  # Third component
             ))
-            comp_id = cur.fetchone()[0]
-            components_inserted.append(f"strength (ID {comp_id})")
+            strength_component_id = cur.fetchone()[0]
+            
+            # Insert strength-specific details (minimal for now)
+            cur.execute("""
+                INSERT INTO strength_component (
+                    component_id
+                )
+                VALUES (%s)
+            """, (
+                strength_component_id,
+            ))
+            
+            components_inserted.append(f"strength (ID {strength_component_id}, {classification['strength_seconds']}s)")
         
         print(f"✅ Inserted components: {', '.join(components_inserted)}")
         
@@ -184,12 +256,14 @@ def ingest_otf_email(filepath, workout_date):
         return {
             'otf_email_id': otf_email_id,
             'session_id': session_id,
-            'components': len(components_inserted)
+            'component_count': len(components_inserted)
         }
         
     except Exception as e:
         conn.rollback()
         print(f"❌ Error ingesting email: {e}")
+        import traceback
+        traceback.print_exc()
         raise
     finally:
         cur.close()
@@ -197,33 +271,43 @@ def ingest_otf_email(filepath, workout_date):
 
 
 def ingest_sample_emails():
-    """Ingest all sample emails from data/sample_data/otf/"""
-    sample_dir = Path(__file__).parent.parent / 'data' / 'sample_emails'
+    """Ingest all sample OTF emails."""
+    sample_dir = PROJECT_ROOT / 'data' / 'sample_otf_emails'
     
-    # Map filenames to dates (in real life, parse from email headers)
+    # Just list the files - dates will be extracted from email body
     emails = [
-        ('sample_90_min.html', datetime(2025, 12, 6).date()),
-        ('sample_60_min.html', datetime(2025, 12, 5).date()),
-        ('sample_tread50.html', datetime(2025, 12, 4).date()),
+        'sample_90_min.html',
+        'sample_60_min.html',
+        'sample_tread50.html',
     ]
     
-    print("\n" + "="*60)
-    print("OTF EMAIL INGESTION")
-    print("="*60 + "\n")
+    print("\n" + "="*70)
+    print("OTF EMAIL INGESTION (Component-Specific Schema)")
+    print("="*70 + "\n")
     
-    for filename, workout_date in emails:
+    total_success = 0
+    total_skipped = 0
+    
+    for filename in emails:
         filepath = sample_dir / filename
         if not filepath.exists():
             print(f"⚠️  File not found: {filepath}")
             continue
         
         print(f"\n📧 Processing: {filename}")
-        print(f"   Date: {workout_date}")
-        result = ingest_otf_email(filepath, workout_date)
+        
+        result = ingest_otf_email(filepath)
         
         if result:
             print(f"   ✅ Success! Session ID: {result['session_id']}, "
-                  f"Components: {result['components']}\n")
+                  f"Components: {result['component_count']}\n")
+            total_success += 1
+        else:
+            total_skipped += 1
+    
+    print("\n" + "="*70)
+    print(f"SUMMARY: {total_success} ingested, {total_skipped} skipped")
+    print("="*70 + "\n")
 
 
 if __name__ == '__main__':
