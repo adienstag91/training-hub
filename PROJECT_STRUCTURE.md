@@ -19,9 +19,12 @@ training-hub/
 │   │   ├── __init__.py
 │   │   ├── otf_parser.py              # v1 (legacy — superseded by v3)
 │   │   ├── otf_parser_v3.py           # OTF parser: headers + body datetime
-│   │   └── apple_health_parser.py     # Health Auto Export JSON
-│   ├── ingestion/                      # Database insertion
-│   │   └── ingest_otf_emails.py       # Idempotent OTF email → Postgres (v2 schema)
+│   │   ├── apple_health_parser.py     # Health Auto Export JSON
+│   │   └── peloton_parser.py          # Peloton workouts.csv export
+│   ├── ingestion/                      # Database insertion (all idempotent)
+│   │   ├── ingest_otf_emails.py       # OTF email → Postgres
+│   │   ├── ingest_apple_health.py     # Apple Health JSON → Postgres (CLI + webhook)
+│   │   └── ingest_peloton_csv.py      # Peloton CSV → Postgres
 │   ├── strava/                         # Strava output adapter
 │   │   ├── strava_auth.py             # One-time OAuth flow
 │   │   └── publish_to_strava.py       # Per-component publishing + token refresh
@@ -39,9 +42,14 @@ training-hub/
 │   │   ├── fixture_orange_60.html
 │   │   ├── fixture_tread_50.html
 │   │   ├── fixture_strength_50.html
-│   │   └── fixture_apple_health.json
+│   │   ├── fixture_apple_health.json
+│   │   └── fixture_peloton.csv
 │   ├── test_parser.py                 # OTF parser v3 + classification tests
-│   └── test_apple_health_parser.py    # Apple Health parser tests
+│   ├── test_apple_health_parser.py    # Apple Health parser tests
+│   └── test_peloton_parser.py         # Peloton CSV parser tests
+│
+├── migrations/                         # Incremental schema changes for existing DBs
+│   └── 001_apple_health_and_component_types.sql
 │
 └── data/                               # Local data (gitignored)
     └── sample_data/

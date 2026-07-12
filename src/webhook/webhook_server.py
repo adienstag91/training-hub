@@ -21,6 +21,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import our existing functions
 from src.parsers.otf_parser_v3 import parse_otf_email
+from src.parsers.apple_health_parser import parse_apple_health_json
+from src.ingestion.ingest_apple_health import ingest_apple_workout
 from src.strava.publish_to_strava import get_strava_client, publish_component_to_strava
 from src.utils.db import get_db_connection
 import psycopg2.extras
@@ -219,7 +221,7 @@ def home():
 
 
 @app.route('/ingest/apple', methods=['POST'])
-def ingest_apple_workout():
+def ingest_apple_workout_route():
     """
     Webhook endpoint for Apple Health JSON files.
     Does NOT auto-publish to Strava (Apple Fitness syncs separately).
@@ -243,31 +245,30 @@ def ingest_apple_workout():
         # Check if this is Health Auto Export format or direct workout data
         if 'data' in data and 'workouts' in data['data']:
             # Health Auto Export format
-            from src.parsers.apple_health_parser import parse_apple_health_json
             workouts = parse_apple_health_json(json.dumps(data))
-            
+
             component_ids = []
             for workout_data in workouts:
-                comp_id = ingest_apple_workout_to_db(workout_data)
+                comp_id = ingest_apple_workout(workout_data)
                 if comp_id:
                     component_ids.append(comp_id)
-            
+
             return jsonify({
                 'success': True,
-                'message': f'Ingested {len(workouts)} Apple workouts (no Strava sync)',
+                'message': f'Ingested {len(component_ids)} of {len(workouts)} Apple workouts (no Strava sync)',
                 'components_created': len(component_ids)
             })
-            
+
         else:
             # Direct workout data format (future iPhone Shortcuts)
-            comp_id = ingest_apple_workout_to_db(data)
-            
+            comp_id = ingest_apple_workout(data)
+
             return jsonify({
                 'success': True,
                 'message': 'Apple workout ingested (no Strava sync)',
                 'components_created': 1 if comp_id else 0
             })
-        
+
     except Exception as e:
         logger.error(f"Error processing Apple workout: {e}")
         import traceback
@@ -278,95 +279,8 @@ def ingest_apple_workout():
         }), 500
 
 
-def ingest_apple_workout_to_db(workout_data):
-    """
-    Insert Apple workout into database.
-    Returns component ID if successful, None if failed/duplicate.
-    """
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    try:
-        # Create entity key for idempotency
-        workout_date = workout_data['start_time'].date()
-        apple_id = workout_data.get('apple_workout_id', 'unknown')
-        entity_key = f"workout:{workout_date.isoformat()}:apple:{apple_id}"
-        
-        # Insert workout session
-        cur.execute("""
-            INSERT INTO workout_session (
-                source_type, entity_key, workout_date, start_time,
-                total_duration_seconds, total_calories, source_metadata, apple_health_id
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (entity_key) DO NOTHING
-            RETURNING id
-        """, (
-            'apple_health',
-            entity_key,
-            workout_date,
-            workout_data['start_time'],
-            workout_data['duration_seconds'],
-            workout_data.get('active_calories'),
-            psycopg2.extras.Json({
-                'apple_workout_id': apple_id,
-                'name': workout_data['name'],
-                'is_indoor': workout_data.get('is_indoor', False),
-                'location': workout_data.get('location'),
-                'avg_heart_rate': workout_data.get('avg_heart_rate'),
-                'max_heart_rate': workout_data.get('max_heart_rate')
-            }),
-            apple_id  # Set apple_health_id for the constraint
-        ))
-        
-        result = cur.fetchone()
-        if not result:
-            logger.info(f"Apple workout already exists: {entity_key}")
-            return None
-            
-        session_id = result[0]
-        logger.info(f"Created Apple workout session (ID {session_id}): {workout_data['name']}")
-        
-        # Insert component based on workout type
-        component_entity_key = f"workout:{workout_date.isoformat()}:apple_{workout_data['workout_type']}:{session_id}"
-        
-        cur.execute("""
-            INSERT INTO workout_component (
-                workout_session_id, entity_key, component_type,
-                duration_seconds, is_derived, sequence_order
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (
-            session_id, component_entity_key, workout_data['workout_type'],
-            workout_data['duration_seconds'], False, 1
-        ))
-        
-        component_id = cur.fetchone()[0]
-        
-        # Insert type-specific data if applicable
-        if workout_data['workout_type'] == 'run' and workout_data.get('distance_meters', 0) > 0:
-            cur.execute("""
-                INSERT INTO run_component (component_id, distance_meters)
-                VALUES (%s, %s)
-            """, (component_id, workout_data['distance_meters']))
-        
-        conn.commit()
-        logger.info(f"Created Apple {workout_data['workout_type']} component (ID {component_id})")
-        
-        return component_id
-        
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error ingesting Apple workout: {e}")
-        raise
-    finally:
-        cur.close()
-        conn.close()
-
-
 @app.route('/ingest', methods=['POST'])
-def ingest_otf_email():
+def ingest_otf_email_route():
     """
     Webhook endpoint for Zapier to send OTF emails.
     

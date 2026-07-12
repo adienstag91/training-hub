@@ -30,6 +30,14 @@ test:
 ingest:
 	python src/ingestion/ingest_otf_emails.py
 
+# Ingest an Apple Health export:  make ingest-apple FILE=path/to/export.json
+ingest-apple:
+	python src/ingestion/ingest_apple_health.py $(FILE)
+
+# Ingest a Peloton CSV export:  make ingest-peloton FILE=path/to/workouts.csv
+ingest-peloton:
+	python src/ingestion/ingest_peloton_csv.py $(FILE)
+
 # Run the Zapier/n8n webhook server (port 5000; expose with ngrok)
 webhook:
 	python src/webhook/webhook_server.py

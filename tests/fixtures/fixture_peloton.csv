@@ -1,0 +1,6 @@
+Workout Timestamp,Live/On-Demand,Instructor Name,Length (minutes),Fitness Discipline,Type,Title,Class Timestamp,Total Output,Avg. Watts,Avg. Resistance,Avg. Cadence (RPM),Avg. Speed (mph),Distance (mi),Calories Burned,Avg. Heartrate,Avg. Incline,Avg. Pace (min/mi)
+2026-01-05 06:30 (EST),On Demand,Test Instructor,30,Cycling,Original,30 min Power Zone Ride,2025-12-30 10:00 (EST),412,229,52%,88,19.2,9.61,438,151,,
+2026-01-06 07:15 (EST),On Demand,Test Runner,20,Running,Original,20 min Tempo Run,2026-01-02 09:00 (EST),,,,,6.1,2.05,265,158,1.5,9:45
+2026-01-07 18:00 (EST),On Demand,Test Lifter,10,Strength,Original,10 min Core Strength,2026-01-03 08:00 (EST),,,,,,,84,121,,
+2026-01-08 06:45 (EST),On Demand,Test Yogi,15,Yoga,Original,15 min Morning Yoga,2026-01-04 07:00 (EST),,,,,,,56,98,,
+2026-01-09 12:00 (EST),,,,Cycling,Just Ride,Just Ride,,,,,,,,,,,

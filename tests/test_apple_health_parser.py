@@ -32,8 +32,26 @@ def test_parse_apple_health_json():
 
 def test_map_apple_workout_type():
     assert map_apple_workout_type("Outdoor Run") == "run"
+    assert map_apple_workout_type("Outdoor Walk") == "walk"
+    assert map_apple_workout_type("Hiking") == "walk"
+    assert map_apple_workout_type("Outdoor Cycling") == "bike"
     assert map_apple_workout_type("Traditional Strength Training") == "strength"
     assert map_apple_workout_type("HIIT") == "hiit"
     assert map_apple_workout_type("Yoga") == "yoga"
     assert map_apple_workout_type("Cooldown Stretch") == "flexibility"
     assert map_apple_workout_type("Table Tennis") == "other"
+
+
+def test_stable_fallback_id_without_apple_id():
+    """A workout without Apple's id must get a deterministic identifier."""
+    from src.parsers.apple_health_parser import extract_workout_data
+
+    workout = {
+        "name": "Outdoor Run",
+        "start": "2026-03-01 08:00:00 -0500",
+        "end": "2026-03-01 08:30:00 -0500",
+    }
+    first = extract_workout_data(dict(workout))
+    second = extract_workout_data(dict(workout))
+    assert first["apple_workout_id"] == second["apple_workout_id"]
+    assert first["apple_workout_id"] == "Outdoor Run:2026-03-01 08:00:00 -0500"

@@ -33,10 +33,19 @@ CREATE TABLE strava_activity_raw (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Peloton workout storage (future)
+-- Peloton workout storage (CSV export rows or API payloads)
 CREATE TABLE peloton_workout_raw (
     id SERIAL PRIMARY KEY,
     peloton_workout_id TEXT NOT NULL UNIQUE,
+    fetched_at TIMESTAMPTZ NOT NULL,
+    raw_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Apple Health workout storage (Health Auto Export JSON)
+CREATE TABLE apple_health_raw (
+    id SERIAL PRIMARY KEY,
+    apple_workout_id TEXT NOT NULL UNIQUE,
     fetched_at TIMESTAMPTZ NOT NULL,
     raw_json JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -54,6 +63,7 @@ CREATE TABLE workout_session (
     otf_email_id INTEGER REFERENCES otf_email_raw(id),
     strava_activity_id INTEGER REFERENCES strava_activity_raw(id),
     peloton_workout_id INTEGER REFERENCES peloton_workout_raw(id),
+    apple_health_id INTEGER REFERENCES apple_health_raw(id),
     source_type TEXT NOT NULL CHECK (source_type IN ('otf', 'strava', 'peloton', 'apple_health', 'manual')),
     
     -- Canonical entity key (stable linkage)
@@ -75,11 +85,12 @@ CREATE TABLE workout_session (
     
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     
-    -- Ensure only one source FK is populated
+    -- At most one source FK is populated ('manual' sessions have none)
     CONSTRAINT check_single_source CHECK (
-        (otf_email_id IS NOT NULL)::INTEGER + 
-        (strava_activity_id IS NOT NULL)::INTEGER + 
-        (peloton_workout_id IS NOT NULL)::INTEGER = 1
+        (otf_email_id IS NOT NULL)::INTEGER +
+        (strava_activity_id IS NOT NULL)::INTEGER +
+        (peloton_workout_id IS NOT NULL)::INTEGER +
+        (apple_health_id IS NOT NULL)::INTEGER <= 1
     )
 );
 
@@ -92,7 +103,9 @@ CREATE TABLE workout_component (
     entity_key TEXT NOT NULL UNIQUE,
     
     -- Component type
-    component_type TEXT NOT NULL CHECK (component_type IN ('run', 'row', 'bike', 'strength', 'other')),
+    component_type TEXT NOT NULL CHECK (
+        component_type IN ('run', 'row', 'bike', 'strength', 'walk', 'hiit', 'yoga', 'flexibility', 'other')
+    ),
     
     -- Universal raw metrics (what every component has)
     duration_seconds INTEGER NOT NULL,

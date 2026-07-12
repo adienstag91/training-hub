@@ -31,16 +31,22 @@ This project solves that by:
 - [x] PostgreSQL schema v2 (component-specific detail tables, multi-source)
 - [x] pytest suite with synthetic fixture emails (runs in any clone, no personal data)
 
-**Phase 2 (Mostly Complete)**
-- [x] PostgreSQL ingestion script (idempotent, env-configured, verified end-to-end)
+**Phase 2 (Mostly Complete) — centralized multi-source database**
+- [x] OTF ingestion (idempotent, env-configured, verified end-to-end)
+- [x] Apple Health ingestion (Health Auto Export JSON: CLI backfill + `/ingest/apple`
+      webhook; raw JSON stored, outdoor runs get distance/HR detail)
+- [x] Peloton ingestion (official `workouts.csv` export; bike metrics —
+      cadence/watts/resistance/instructor — into `bike_component`)
 - [x] Strava API integration (OAuth flow + per-component publishing with token refresh)
 - [x] Webhook server for event-based email ingestion (Flask; Zapier/n8n → `/ingest`)
-- [x] Apple Health ingestion (Health Auto Export JSON → `/ingest/apple`)
 - [ ] Deploy the webhook server (currently local + ngrok)
 - [ ] Re-verify parser against current OTF email format
+- [ ] Peloton API automation (CSV export covers backfill; scheduled pulls later)
+- [ ] Reprocess-from-raw tool (re-derive sessions from stored raw data after
+      parser/schema changes — the ELT payoff)
 
-**Phase 3 (Planned)**
-- [ ] Weekly insights rollup
+**Phase 3 (Planned) — build on top**
+- [ ] Weekly insights rollup (cross-source: OTF + Peloton + Apple)
 - [ ] Training plan generation (v1)
 - [ ] Google Calendar sync
 
@@ -70,14 +76,21 @@ make test           # or: python -m pytest tests/ -v
 Tests run against synthetic fixture emails in `tests/fixtures/` — they mirror
 the structure of real OTF emails but contain no personal data.
 
-### Ingest Emails
+### Ingest Data (any source)
 ```bash
-# Ingest a single OTF email (date + Message-ID parsed from the email itself)
+# OTF email (date + Message-ID parsed from the email itself)
 python src/ingestion/ingest_otf_emails.py path/to/email.html
+# ...or drop real emails in data/sample_data/otf/ (gitignored) and: make ingest
 
-# Or drop real emails in data/sample_data/otf/ (gitignored) and run
-make ingest
+# Apple Health (Health Auto Export JSON — backfill or one file at a time)
+make ingest-apple FILE=path/to/HealthAutoExport.json
+
+# Peloton (official CSV export: Profile -> Workouts -> Download Workouts)
+make ingest-peloton FILE=path/to/workouts.csv
 ```
+All ingestion is idempotent — re-running the same file skips what's already
+in the database. Raw source data (email HTML, export JSON, CSV rows) is
+stored immutably before normalization, so everything can be re-derived.
 
 ### Publish to Strava
 ```bash

@@ -6,7 +6,6 @@ Parses Health Auto Export JSON files and extracts workout data.
 import json
 from datetime import datetime
 from typing import Dict, List, Optional
-import uuid
 
 
 def parse_apple_health_json(json_content: str) -> List[Dict]:
@@ -64,8 +63,9 @@ def extract_workout_data(workout: Dict) -> Optional[Dict]:
     avg_heart_rate = workout.get('avgHeartRate', {}).get('qty')
     max_heart_rate = workout.get('maxHeartRate', {}).get('qty')
     
-    # Generate unique identifier
-    apple_workout_id = workout.get('id', str(uuid.uuid4()))
+    # Unique identifier: prefer Apple's own id; otherwise derive a stable one
+    # from name + start so re-importing the same file stays idempotent.
+    apple_workout_id = workout.get('id') or f"{workout['name']}:{workout['start']}"
     
     return {
         'source': 'apple_health',
@@ -97,13 +97,17 @@ def parse_apple_date(date_string: str) -> Optional[datetime]:
 def map_apple_workout_type(apple_name: str) -> str:
     """
     Map Apple workout names to our standardized types.
-    
-    Our types: run, strength, hiit, yoga, flexibility
+
+    Our types: run, walk, bike, strength, hiit, yoga, flexibility, other
     """
     apple_name_lower = apple_name.lower()
-    
+
     if 'run' in apple_name_lower:
         return 'run'
+    elif 'walk' in apple_name_lower or 'hik' in apple_name_lower:
+        return 'walk'
+    elif any(word in apple_name_lower for word in ['cycling', 'bike']):
+        return 'bike'
     elif any(word in apple_name_lower for word in ['strength', 'weight', 'lifting']):
         return 'strength'
     elif any(word in apple_name_lower for word in ['hiit', 'interval', 'circuit']):
