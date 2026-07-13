@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: training_hub_db
+    environment:
+      POSTGRES_DB: training_hub
+      POSTGRES_USER: training_user
+      POSTGRES_PASSWORD: training_pass
+    # 5434 to avoid clashing with a local Postgres (5432) or other projects
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Schema is applied automatically on first startup (empty volume only)
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U training_user -d training_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

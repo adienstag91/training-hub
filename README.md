@@ -23,56 +23,89 @@ This project solves that by:
 ## Project Status
 
 **Phase 1 Complete ✅**
-- [x] Email parser with HTML extraction
-- [x] Rule-based workout classification
+- [x] Email parser with HTML extraction (v3: tag-based navigation)
+- [x] Rule-based workout classification (all 4 class types)
 - [x] Strength time calculation (residual)
 - [x] Distance standardization (meters)
-- [x] PostgreSQL schema design
-- [x] 100% test coverage
+- [x] Real email header parsing (Message-ID from headers, workout datetime from body)
+- [x] PostgreSQL schema v2 (component-specific detail tables, multi-source)
+- [x] pytest suite with synthetic fixture emails (runs in any clone, no personal data)
 
-**Phase 2 (In Progress)**
-- [ ] PostgreSQL ingestion script
-- [ ] Strava API integration
-- [ ] Event-based email ingestion (Zapier)
+**Phase 2 (Mostly Complete) — centralized multi-source database**
+- [x] OTF ingestion (idempotent, env-configured, verified end-to-end)
+- [x] Apple Health ingestion (Health Auto Export JSON: CLI backfill + `/ingest/apple`
+      webhook; raw JSON stored, outdoor runs get distance/HR detail)
+- [x] Peloton ingestion (official `workouts.csv` export; bike metrics —
+      cadence/watts/resistance/instructor — into `bike_component`)
+- [x] Strava API integration (OAuth flow + per-component publishing with token refresh)
+- [x] Webhook server for event-based email ingestion (Flask; Zapier/n8n → `/ingest`)
+- [ ] Deploy the webhook server (currently local + ngrok)
+- [ ] Re-verify parser against current OTF email format
+- [ ] Peloton API automation (CSV export covers backfill; scheduled pulls later)
+- [ ] Reprocess-from-raw tool (re-derive sessions from stored raw data after
+      parser/schema changes — the ELT payoff)
 
-**Phase 3 (Planned)**
-- [ ] Weekly insights rollup
+**Phase 3 (Planned) — build on top**
+- [ ] Weekly insights rollup (cross-source: OTF + Peloton + Apple)
 - [ ] Training plan generation (v1)
 - [ ] Google Calendar sync
 
 ## Quick Start
 
 ### Prerequisites
-```bash
-# Python 3.8+
-python --version
-
-# PostgreSQL
-brew install postgresql  # macOS
-brew services start postgresql
-```
+- Python 3.8+
+- Docker (for PostgreSQL)
 
 ### Installation
 ```bash
 # Clone repo
-git clone https://github.com/yourusername/otf-training-pipeline.git
-cd otf-training-pipeline
+git clone https://github.com/adienstag91/training-hub.git
+cd training-hub
 
 # Install dependencies
-pip install -r requirements.txt
+make setup          # or: pip install -r requirements.txt
 
-# Set up database
-createdb otf_training
-psql otf_training < schema.sql
+# Start PostgreSQL (schema applied automatically on first run; port 5434)
+make db             # or: docker compose up -d
 ```
 
 ### Run Tests
 ```bash
-# Place sample OTF emails in data/sample_emails/
-# (They're gitignored to protect personal info)
-
-python tests/test_parser.py
+make test           # or: python -m pytest tests/ -v
 ```
+Tests run against synthetic fixture emails in `tests/fixtures/` — they mirror
+the structure of real OTF emails but contain no personal data.
+
+### Ingest Data (any source)
+```bash
+# OTF email (date + Message-ID parsed from the email itself)
+python src/ingestion/ingest_otf_emails.py path/to/email.html
+# ...or drop real emails in data/sample_data/otf/ (gitignored) and: make ingest
+
+# Apple Health (Health Auto Export JSON — backfill or one file at a time)
+make ingest-apple FILE=path/to/HealthAutoExport.json
+
+# Peloton (official CSV export: Profile -> Workouts -> Download Workouts)
+make ingest-peloton FILE=path/to/workouts.csv
+```
+All ingestion is idempotent — re-running the same file skips what's already
+in the database. Raw source data (email HTML, export JSON, CSV rows) is
+stored immutably before normalization, so everything can be re-derived.
+
+### Publish to Strava
+```bash
+make strava-auth   # one-time OAuth flow; saves tokens to .env
+make publish       # publish all unpublished components
+```
+
+### Run the Webhook Server (event-driven ingestion)
+```bash
+make webhook       # Flask on :5000; expose with ngrok for Zapier/n8n
+# POST {"html": "<email html>"} to /ingest  → parse + DB + Strava
+# POST Health Auto Export JSON to /ingest/apple
+```
+Strava auto-publish is skipped automatically when no `STRAVA_ACCESS_TOKEN`
+is configured (or when `STRAVA_AUTO_PUBLISH=false`).
 
 ## Example Usage
 
@@ -142,62 +175,56 @@ source_key = f"otf_email:{message_id}:{workout_date}"
 entity_key = f"workout:{date}:otf_{type}:{session_id}"
 ```
 
-### 4. Single Component Table
-One table for run/row/strength with CHECK constraints:
+### 4. Base Component Table + Type-Specific Detail Tables (schema v2)
+A shared `workout_component` table holds what every component has (type,
+duration, sequence order); per-type detail tables hold the rest:
 ```sql
--- Run must have distance
-CHECK (component_type != 'run' OR distance_meters IS NOT NULL)
-
--- Strength cannot have distance
-CHECK (component_type != 'strength' OR distance_meters IS NULL)
+workout_component            -- shared: type, duration_seconds, sequence_order
+  ├── run_component          -- distance, elevation, cadence, GPS
+  ├── row_component          -- distance, stroke rate, watts
+  ├── bike_component         -- distance, cadence, power (Peloton-ready)
+  └── strength_component     -- exercises, muscle groups, equipment
 ```
 
-**Why not separate tables?** Simpler queries, easier to add new types (bike, strider), still fully normalized (3NF).
+**Why?** Each modality gets its own metrics without a sea of NULLable
+columns, and adding a new type (bike, strider) is a new detail table, not
+a schema-wide change.
 
 ### 5. Distance in Meters (Always)
 Tread distance converted from miles → meters at parse time. Single unit throughout system prevents conversion bugs.
 
-## Database Schema
+## Database Schema (v2)
 
 ```sql
-otf_email_raw          -- Raw emails (never modified)
-  ├── message_id (unique)
-  └── raw_html
+otf_email_raw               -- Raw emails (never modified)
+strava_activity_raw         -- Raw Strava activities (future input)
+peloton_workout_raw         -- Raw Peloton workouts (future input)
 
-workout_session        -- Normalized sessions
+workout_session             -- Normalized sessions (all sources)
   ├── entity_key (unique)
-  ├── class_type
-  └── class_minutes
+  ├── source_type (otf/strava/peloton/apple_health/manual)
+  ├── start_time, otf_class_type
+  └── source_metadata (JSONB)
 
-workout_component      -- Granular components
+workout_component           -- Base component (shared fields)
   ├── entity_key (unique)
-  ├── component_type (run/row/strength)
-  ├── duration_seconds
-  └── distance_meters
+  ├── component_type (run/row/bike/strength/other)
+  ├── duration_seconds, sequence_order
+  ├── run_component / row_component / bike_component / strength_component
 
-strava_activity        -- Output adapter
-  ├── workout_component_id (FK)
-  └── strava_activity_id
+strava_activity_publish     -- Output adapter (sync status per component)
 ```
 
 ## Test Results
 
 ```
-✅ 90-min ORANGE class
-   Tread: 23.93 min (5165m)
-   Row: 17.88 min (4189m)
-   Strength: 48.18 min (calculated)
+✅ ORANGE_90  — tread 23:45 (5165m) + row 17:30 (4189m) + strength 48:45 (residual)
+✅ ORANGE_60  — tread 25:15 (5149m) + row 3:45 (932m) + strength 31:00 (residual)
+✅ TREAD_50   — tread 44:30 (9253m), no strength component
+✅ STRENGTH_50 — no cardio sections, full 50 min strength
 
-✅ 60-min ORANGE class
-   Tread: 25.88 min (5149m)
-   Row: 3.85 min (932m)
-   Strength: 30.27 min (calculated)
-
-✅ TREAD_50
-   Tread: 44.87 min (9253m)
-   Strength: 0 min (no component created)
-
-Coverage: 3/3 workout types (100%)
+Coverage: 4/4 workout types, plus time-parsing and classification
+boundary tests (15 tests, all passing)
 ```
 
 ## Technology Stack
@@ -233,12 +260,9 @@ MIT License - see LICENSE file for details
 
 ## Contact
 
-Andrew Dienstag - [LinkedIn](https://linkedin.com/in/yourprofile) | [Email](mailto:andrew.dienstag@gmail.com)
+Andrew Dienstag - [Email](mailto:andrew.dienstag@gmail.com)
 
 ---
 
 **Built with production-grade data engineering principles**  
 *Idempotent pipelines • Type-safe schemas • Event-driven architecture*
-# training-hub
-# training-hub
-# training-hub
